@@ -5,10 +5,10 @@ const imageUtils = require('./image');
 const aproxEquals = (moduleSize1, moduleSize2, x1, y1,x2, y2) => 
     Math.abs(x1 - x2) < Math.min(moduleSize1, moduleSize2) &&
     Math.abs(y1 - y2) < Math.min(moduleSize1, moduleSize2) &&
-    Math.abs(moduleSize1 * 7 - moduleSize2 * 7) < Math.min(moduleSize1, moduleSize2);
+    Math.abs(moduleSize1 - moduleSize2) < Math.min(moduleSize1, moduleSize2);
 const distance = (x1, y1, x2, y2) => Math.sqrt((x2 - x1) ** 2 + (y2 - y1) ** 2);
 
-// Looking for 1:1:3:1:1 with allowed deviation of max 75% per module
+// Looking for 1:1:3:1:1 with allowed deviation of max @maxVariance per module
 const possibleQrFinderPattern = (scan, maxVariance) => {
     if (scan.length < 5)
         return [];
@@ -34,98 +34,144 @@ const possibleQrFinderPattern = (scan, maxVariance) => {
     return possiblePositions;
 };
 
-// Looking for line segment intersections filtering ones that are not aprox. square; filtering with diagonal scan; merging ones that are aprox. equal
-const filterPossibleQrCodeScans = (image, possibleHorizontal, possibleVertical) => {
-    // Intersections (filtering aprox. squares by comparing module sizes)
-    const positions = [];
-    for (let horiz of possibleHorizontal) {
-        for (let vert of possibleVertical) {
-            if (vert.yStart < horiz.y && horiz.y < vert.yEnd &&
-                    horiz.xStart < vert.x && vert.x < horiz.xEnd &&
-                    aproxEquals((horiz.xEnd - horiz.xStart) / 7, (vert.yEnd - vert.yStart) / 7, 0, 0, 0, 0))
-                positions.push({
-                    xUpperLeft: horiz.xStart,
-                    yUpperLeft: vert.yStart,
-                    width: horiz.xEnd - horiz.xStart + 1,
-                    height: vert.yEnd - vert.yStart + 1,
-                });
-        }
-    }
+// For each scan that is aprox the pattern, do a vertical check to find centerX, do another horizontal to find centerY, do a diagonal from calculated center to confirm; lastly merging ones that are aprox. equal
+const findPossibleFinderPatternLocations = (image, possibleFinderPatternLocations, yCoord, horizScan, scanXCoordinates) => {
+    const possiblePositions = possibleQrFinderPattern(horizScan, 0.5);
 
-    // Filtering with diagonal scan
-    const filtered2 = [];
-    for (let f1 of positions) {
-        const scan = [0];
+    for (let position of possiblePositions) {
+        const leftX = scanXCoordinates[position];
+        const rightX = leftX + horizScan[position] + horizScan[position + 1] + horizScan[position + 2] + horizScan[position + 3] + horizScan[position + 4];
+        const estimatedModuleSize = Math.round((rightX - leftX) / 7);
+        const centerOffset = Math.ceil((rightX - leftX) / 2);
         
-        let mode = imageUtils.getLuminance(image, f1.xUpperLeft, f1.yUpperLeft);    // 0 - black pixels, 255 - white pixels
-        for (let x = f1.xUpperLeft, y = f1.yUpperLeft; x < f1.xUpperLeft + f1.width && y < f1.yUpperLeft + f1.height; x++, y++) {
+        // Vertical check
+        const possibleVerticalPositions = [];
+        for (let x = leftX; x < rightX; x++) {
+            const scan = [0];
+            const scanYCoordinates = [yCoord - centerOffset];
+
+            let mode = imageUtils.getLuminance(image, x, yCoord - centerOffset);    // 0 - black pixels, 255 - white pixels
+            for (let y = yCoord - centerOffset; y > 0 && y < image.metadata.height && y <= yCoord + centerOffset; y++) {
+                const pixelY = imageUtils.getLuminance(image, x, y);
+                if (mode != pixelY) {
+                    mode = pixelY;
+                    scan.push(1);
+                    scanYCoordinates.push(y);
+                } else {
+                    scan[scan.length - 1]++;
+                }
+            }
+
+            const patternFinds = possibleQrFinderPattern(scan, 0.5);
+
+            for (let patternFind of patternFinds) {
+                const patternLen = scan[patternFind] + scan[patternFind + 1] + scan[patternFind + 2] + scan[patternFind + 3] + scan[patternFind + 4];
+                const moduleSize = Math.round(patternLen / 7);
+                // module sizes must be less than 40% different
+                if (Math.abs(moduleSize - estimatedModuleSize) / estimatedModuleSize >= 0.4)
+                    continue;
+                possibleVerticalPositions.push({ x, yStart: scanYCoordinates[patternFind] });
+            }
+        }
+        if (possibleVerticalPositions.length === 0)
+            continue;
+        const centerX = Math.round(possibleVerticalPositions.reduce((a, b) => a + b.x, 0) / possibleVerticalPositions.length);
+
+        // Horizontal check
+        const startYCheck = Math.floor(possibleVerticalPositions.reduce((a, b) => a + b.yStart, 0) / possibleVerticalPositions.length);
+        const endYCheck = startYCheck + (rightX - leftX);
+        const possibleHorizontalPositions = [];
+        for (let y = startYCheck; y < endYCheck; y++) {
+            const scan = [0];
+            const scanXCoordinates = [centerX - centerOffset];
+
+            let mode = imageUtils.getLuminance(image, centerX - centerOffset, y);    // 0 - black pixels, 255 - white pixels
+            for (let x = centerX - centerOffset; x > 0 && x < image.metadata.width && x <= centerX + centerOffset; x++) {
+                let pixelY = imageUtils.getLuminance(image, x, y);
+                if (mode != pixelY) {
+                    mode = pixelY;
+                    scan.push(1);
+                    scanXCoordinates.push(x);
+                } else {
+                    scan[scan.length - 1]++;
+                }
+            }
+
+            const patternFinds = possibleQrFinderPattern(scan, 0.5);
+
+            for (let patternFind of patternFinds) {
+                const patternLen = scan[patternFind] + scan[patternFind + 1] + scan[patternFind + 2] + scan[patternFind + 3] + scan[patternFind + 4];
+                const moduleSize = Math.round(patternLen / 7);
+                // module sizes must be less than 40% different
+                if (Math.abs(moduleSize - estimatedModuleSize) / estimatedModuleSize >= 0.4)
+                    continue;
+                    possibleHorizontalPositions.push({ y, xStart: scanXCoordinates[patternFind] });
+            }
+        }
+        if (possibleHorizontalPositions.length === 0)
+            continue;
+        const centerY = Math.round(possibleHorizontalPositions.reduce((a, b) => a + b.y, 0) / possibleHorizontalPositions.length);
+
+        // From center to north west diagonally searching for corner of finder pattern
+        let diagonalStartX = centerX, diagonalStartY = centerY;
+        let changeCounter = 3;
+        let lastColor = imageUtils.getLuminance(image, diagonalStartX, diagonalStartY);
+        while (changeCounter > 0 && diagonalStartX >= 0 && diagonalStartY >= 0) {
+            diagonalStartX--;
+            diagonalStartY--;
+
+            let newColor = imageUtils.getLuminance(image, diagonalStartX, diagonalStartY);
+            if (lastColor !== newColor)
+                changeCounter--;
+            lastColor = newColor;
+        }
+        diagonalStartX++; diagonalStartY++;
+        if (changeCounter !== 0)
+            continue;
+
+        // Filtering with diagonal scan
+        const scanDiag = [0, 0, 0, 0, 0];
+        let index = 0;
+        let mode = imageUtils.getLuminance(image, diagonalStartX, diagonalStartY);
+        for (let x = diagonalStartX, y = diagonalStartY; x < image.metadata.width && y < image.metadata.height; x++, y++) {
             let pixelY = imageUtils.getLuminance(image, x, y);
             if (mode != pixelY) {
                 mode = pixelY;
-                scan.push(1);
+                index++;
+
+                if (index === scanDiag.length)
+                    break;
             } else {
-                scan[scan.length - 1]++;
+                scanDiag[index]++;
             }
         }
-
-        for (let scanPos of possibleQrFinderPattern(scan, 0.75)) {
-            let moduleSize = 0;
-
-            for (let i = 0; i < 5; i++)
-                moduleSize += scan[scanPos + i];
-            moduleSize /= 7;
-
-            if (aproxEquals(moduleSize, Math.min(f1.height / 7, f1.width / 7), 0, 0, 0, 0)) {
-                filtered2.push(f1);
-                break;
-            }
-        }
-    }
-
-    // Filtering aprox. equal
-    const filtered3 = [];
-    for (let f2 of filtered2) {
-        const moduleSize2 = Math.min(f2.width / 7, f2.height / 7);
-
+        if (possibleQrFinderPattern(scanDiag, 0.5).length === 0)
+            continue;
+        
+        // Merge if similar
         let similar = false;
-        let index = 0;
-        for (let f3 of filtered3) {
-            const moduleSize3 = Math.min(f3.width / 7, f3.height / 7);
+        for (let location of possibleFinderPatternLocations) {
+            const div = location.similar;
 
-            if (aproxEquals(moduleSize2, moduleSize3, f2.xUpperLeft, f2.yUpperLeft, f3.xUpperLeft, f3.yUpperLeft)) {
+            if (aproxEquals(estimatedModuleSize, location.estimatedModuleSize / div, centerX, centerY, location.centerX / div, location.centerY / div)) {
                 similar = true;
+
+                location.estimatedModuleSize += estimatedModuleSize;
+                location.centerX += centerX;
+                location.centerY += centerY;
+                location.similar++;
+
                 break;
             }
-
-            index++;
         }
-
-        if (similar) {
-            filtered3[index].xUpperLeft += f2.xUpperLeft;
-            filtered3[index].yUpperLeft += f2.yUpperLeft;
-            filtered3[index].width += f2.width;
-            filtered3[index].height += f2.height;
-            filtered3[index].similarCount++;
-        } else {
-            filtered3.push({ ...f2, similarCount: 1});
-        }
+        
+        if (!similar)
+            possibleFinderPatternLocations.push({ centerX, centerY, estimatedModuleSize, similar: 1 });
     }
-
-    filtered3.forEach((value) => {        
-        value.xUpperLeft = Math.round(value.xUpperLeft / value.similarCount);
-        value.yUpperLeft = Math.round(value.yUpperLeft / value.similarCount);
-        value.width = Math.round(value.width / value.similarCount);
-        value.height = Math.round(value.height / value.similarCount);
-        delete value.similarCount;
-    });
-
-    console.log(filtered3);
-
-    return filtered3;
 };
 
 // Returns 3 best locations, i.e. those that have similar module size and form a shape closer to an isosceles right-angled triangle
-const findBestQrFinderPatternLocations = (possibleLocations) => {
+const findBestFinderPatternLocations = (possibleLocations) => {
     if (possibleLocations.length < 3)
         return null;
     
@@ -134,25 +180,25 @@ const findBestQrFinderPatternLocations = (possibleLocations) => {
 
     for (let i = 0; i < possibleLocations.length - 2; i++) {
         const fp1 = possibleLocations[i];
-        const moduleSize1 = Math.min(fp1.width / 7, fp1.height / 7);
+        const moduleSize1 = fp1.estimatedModuleSize;
 
         for (let j = i + 1; j < possibleLocations.length - 1; j++) {
             const fp2 = possibleLocations[j];
-            const moduleSize2 = Math.min(fp2.width / 7, fp2.height / 7);
-            const dist = distance(fp1.xUpperLeft, fp1.yUpperLeft, fp2.xUpperLeft, fp2.yUpperLeft);
+            const moduleSize2 = fp2.estimatedModuleSize;
+            const dist = distance(fp1.centerX, fp1.centerY, fp2.centerX, fp2.centerY);
 
             for (let k = j + 1; k < possibleLocations.length; k++) {
                 const fp3 = possibleLocations[k];
-                const moduleSize3 = Math.min(fp3.width / 7, fp3.height / 7);
+                const moduleSize3 = fp3.estimatedModuleSize;
                 
                 const minModuleSize = Math.min(Math.min(moduleSize1, moduleSize2), moduleSize3);
                 const maxModuleSize = Math.max(Math.max(moduleSize1, moduleSize2), moduleSize3);
-                if (maxModuleSize > minModuleSize * 1.4)
+                if (maxModuleSize !== minModuleSize)
                     continue; // module sizes too different
 
                 let a = dist;
-                let b = distance(fp1.xUpperLeft, fp1.yUpperLeft, fp3.xUpperLeft, fp3.yUpperLeft);
-                let c = distance(fp2.xUpperLeft, fp2.yUpperLeft, fp3.xUpperLeft, fp3.yUpperLeft);
+                let b = distance(fp1.centerX, fp1.centerY, fp3.centerX, fp3.centerY);
+                let c = distance(fp2.centerX, fp2.centerY, fp3.centerX, fp3.centerY);
 
                 // sort a, b, c ascending
                 if (a < b) {
@@ -208,11 +254,11 @@ module.exports.findQr = (image) => {
     const width = image.metadata.width;
     const height = image.metadata.height;
 
-    const possibleHorizontal = [];
+    const possibleFinderPatternLocations = [];
 
     // Finding with horizontal scan lines
     for (let y = 0; y < height; y++) {
-        const scan = [0];
+        const horizScan = [0];
         const scanXCoordinates = [0];
         
         let mode = imageUtils.getLuminance(image, 0, y);           // 0 - black pixels, 255 - white pixels
@@ -220,50 +266,25 @@ module.exports.findQr = (image) => {
             let pixelY = imageUtils.getLuminance(image, x, y);
             if (mode != pixelY) {
                 mode = pixelY;
-                scan.push(1);
+                horizScan.push(1);
                 scanXCoordinates.push(x);
             } else {
-                scan[scan.length - 1]++;
+                horizScan[horizScan.length - 1]++;
             }
         }
 
-        possibleQrFinderPattern(scan, 0.5).forEach((index) => {
-            possibleHorizontal.push({
-                xStart: scanXCoordinates[index],
-                xEnd: scanXCoordinates[index] + scan[index] + scan[index + 1] + scan[index + 2] + scan[index + 3] + scan[index + 4],
-                y
-            });
-        });
+        findPossibleFinderPatternLocations(image, possibleFinderPatternLocations, y, horizScan, scanXCoordinates);
     }
 
-    // Finding with vertical scan lines
-    for (let x = 0; x < width; x++) {
-        const scan = [0];
-        const scanYCoordinates = [0];
-        
-        let mode = imageUtils.getLuminance(image, x, 0);           // 0 - black pixels, 255 - white pixels
-        for (let y = 0; y < height; y++) {
-            let pixelY = imageUtils.getLuminance(image, x, y);
-            if (mode != pixelY) {
-                mode = pixelY;
-                scan.push(1);
-                scanYCoordinates.push(y);
-            } else {
-                scan[scan.length - 1]++;
-            }
-        }
+    possibleFinderPatternLocations.forEach((location) => {
+        location.estimatedModuleSize = Math.round(location.estimatedModuleSize / location.similar);
+        location.centerX = Math.round(location.centerX / location.similar);
+        location.centerY = Math.round(location.centerY / location.similar);
+        delete location.similar;
+    })
 
-        possibleQrFinderPattern(scan, 0.5).forEach((index) => {
-            possibleVertical.push({
-                x,
-                yStart: scanYCoordinates[index],
-                yEnd: scanYCoordinates[index] + scan[index] + scan[index + 1] + scan[index + 2] + scan[index + 3] + scan[index + 4]
-            });
-        });
-    }
-
-    const possibleQrFinderPatternPositions = filterPossibleQrCodeScans(image, possibleHorizontal, possibleVertical);
-    const bestLocations = findBestQrFinderPatternLocations(possibleQrFinderPatternPositions);
+    console.log(possibleFinderPatternLocations);
+    const bestLocations = findBestFinderPatternLocations(possibleFinderPatternLocations);
 
     return bestLocations;
 };

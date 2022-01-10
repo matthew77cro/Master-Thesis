@@ -4,10 +4,8 @@ const qr = require('./qr');
 ( async () => {
 
     const img = await image('resources/img.jpg')
-    const binarized = image.binarization(img, img.metadata.width, img.metadata.height / 2);
+    const binarized = image.binarization(img, img.metadata.width, img.metadata.height);
     const qrFinderLocations = qr.findQr(binarized);
-
-    image.saveRaw(binarized, 'result.png');
     console.log(qrFinderLocations);
     // const transformed = image.transformQr(binarized, possibleQrFinderPatternLocations);
     // const qr = image.readQr(transformed);
