@@ -100,7 +100,7 @@ const grayscale = (image) => {
 };*/
 
 const binarization = (image, regionWidth, regionHeight) => {
-    if (image.metadata.channels != 3)
+    if (image.metadata.channels != 3 || regionWidth > image.metadata.width || regionHeight > image.metadata.height)
         return null;
     
     const gray = grayscale(image);
@@ -110,8 +110,7 @@ const binarization = (image, regionWidth, regionHeight) => {
 
     const getPixelValueInRegion = (regionI, regionJ, x, y) => {
         if (regionI >= regionsInHeight || regionJ >= regionsInWidth || x >= regionWidth || y >= regionHeight ||
-            regionI < 0 || regionJ < 0 || x < 0 || y < 0)
-
+                regionI < 0 || regionJ < 0 || x < 0 || y < 0)
             return;
 
         return gray.buffer[regionI * gray.metadata.width * regionHeight + regionJ * regionWidth + y * gray.metadata.width + x];
@@ -119,8 +118,7 @@ const binarization = (image, regionWidth, regionHeight) => {
 
     const setPixelValueInRegion = (regionI, regionJ, x, y, value) => {
         if (regionI >= regionsInHeight || regionJ >= regionsInWidth || x >= regionWidth || y >= regionHeight ||
-            regionI < 0 || regionJ < 0 || x < 0 || y < 0)
-
+                regionI < 0 || regionJ < 0 || x < 0 || y < 0)
             return;
 
         gray.buffer[regionI * gray.metadata.width * regionHeight + regionJ * regionWidth + y * gray.metadata.width + x] = value;
@@ -130,7 +128,6 @@ const binarization = (image, regionWidth, regionHeight) => {
         for (let j = 0; j < regionsInWidth; j++) {
 
             let mean = 0;
-            let stdev = 0;
 
             for (let y = 0; y < regionHeight && i * regionHeight + y < gray.metadata.height; y++) {
                 for (let x = 0; x < regionWidth && j * regionWidth + x < gray.metadata.width; x++) {
@@ -141,16 +138,7 @@ const binarization = (image, regionWidth, regionHeight) => {
 
             for (let y = 0; y < regionHeight && i * regionHeight + y < gray.metadata.height; y++) {
                 for (let x = 0; x < regionWidth && j * regionWidth + x < gray.metadata.width; x++) {
-                    stdev += (getPixelValueInRegion(i, j, x, y) - mean)**2;
-                }
-            }
-            stdev = Math.sqrt(stdev / (regionHeight*regionWidth));
-
-            const T = mean * (1 + (stdev / 1250));
-
-            for (let y = 0; y < regionHeight && i * regionHeight + y < gray.metadata.height; y++) {
-                for (let x = 0; x < regionWidth && j * regionWidth + x < gray.metadata.width; x++) {
-                    if (getPixelValueInRegion(i, j, x, y) < T) {
+                    if (getPixelValueInRegion(i, j, x, y) < mean) {
                         setPixelValueInRegion(i, j, x, y, 0);
                     } else {
                         setPixelValueInRegion(i, j, x, y, 255);

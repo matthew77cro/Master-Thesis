@@ -2,14 +2,13 @@ const imageUtils = require('./image');
 
 // Assumptions: QR code is not mirrored in any way, just rotated and perspective transformed; there is only one QR per image;
 
-const aproxSquare = (width, height) => Math.abs(width - height) / width < 0.1 && Math.abs(width - height) / height < 0.1;
 const aproxEquals = (moduleSize1, moduleSize2, x1, y1,x2, y2) => 
-    Math.abs(x1 - x2) <= 5 * Math.min(moduleSize1, moduleSize2) &&
-    Math.abs(y1 - y2) <= 5 * Math.min(moduleSize1, moduleSize2) &&
-    Math.abs(moduleSize1 - moduleSize2) < Math.min(moduleSize1, moduleSize2);
+    Math.abs(x1 - x2) < Math.min(moduleSize1, moduleSize2) &&
+    Math.abs(y1 - y2) < Math.min(moduleSize1, moduleSize2) &&
+    Math.abs(moduleSize1 * 7 - moduleSize2 * 7) < Math.min(moduleSize1, moduleSize2);
 const distance = (x1, y1, x2, y2) => Math.sqrt((x2 - x1) ** 2 + (y2 - y1) ** 2);
 
-// Looking for 1:1:3:1:1 with allowed deviation of max 10%
+// Looking for 1:1:3:1:1 with allowed deviation of max 50% per module
 const possibleQrFinderPattern = (scan) => {
     if (scan.length < 5)
         return [];
@@ -18,11 +17,11 @@ const possibleQrFinderPattern = (scan) => {
     
     for (let i = 0; i + 5 <= scan.length; i++) {
         const moduleSize = (scan[i] + scan[i + 1] + scan[i + 2] + scan[i + 3] + scan[i + 4]) / 7;
-        const allowedDeviation = moduleSize / 10;
+        const allowedDeviation = moduleSize / 2;
         
         if (Math.abs(moduleSize - scan[i]) <= allowedDeviation &&
             Math.abs(moduleSize - scan[i + 1]) <= allowedDeviation &&
-            Math.abs(3 * moduleSize - scan[i + 2]) <= allowedDeviation &&
+            Math.abs(3 * moduleSize - scan[i + 2]) <= 3 * allowedDeviation &&
             Math.abs(moduleSize - scan[i + 3]) <= allowedDeviation &&
             Math.abs(moduleSize - scan[i + 4]) <= allowedDeviation) {
                 possiblePositions.push(i);
@@ -32,55 +31,92 @@ const possibleQrFinderPattern = (scan) => {
     return possiblePositions;
 };
 
-// Looking for line segment intersections, filtering ones that are not aprox. square, merging ones that are aprox. equal
-const filterPossibleQrCodeScans = (possibleHorizontal, possibleVertical) => {
-    // Intersections
+// Looking for line segment intersections filtering ones that are not aprox. square; filtering with diagonal scan; merging ones that are aprox. equal
+const filterPossibleQrCodeScans = (image, possibleHorizontal, possibleVertical) => {
+    // Intersections (filtering aprox. squares by comparing module sizes)
     const positions = [];
-
     for (let horiz of possibleHorizontal) {
         for (let vert of possibleVertical) {
             if (vert.yStart < horiz.y && horiz.y < vert.yEnd &&
-                horiz.xStart < vert.x && vert.x < horiz.xEnd)
+                    horiz.xStart < vert.x && vert.x < horiz.xEnd &&
+                    aproxEquals((horiz.xEnd - horiz.xStart) / 7, (vert.yEnd - vert.yStart) / 7, 0, 0, 0, 0))
                 positions.push({
                     xUpperLeft: horiz.xStart,
                     yUpperLeft: vert.yStart,
-                    width: horiz.xEnd - horiz.xStart,
-                    height: vert.yEnd - vert.yStart,
+                    width: horiz.xEnd - horiz.xStart + 1,
+                    height: vert.yEnd - vert.yStart + 1,
                 });
         }
     }
 
-    // Filtering only aprox. squares
-    const filtered = [];
-
-    for (let position of positions) {
-        if (aproxSquare(position.width, position.height))
-            filtered.push(position);
-    }
-
-    // Filtering aprox. equal
+    // Filtering with diagonal scan
     const filtered2 = [];
-
-    for (let f1 of filtered) {
-        const moduleSize = Math.min(f1.width / 7, f1.height / 7);
-
-        let similar = false;
-        for (let f2 of filtered2) {
-            const moduleSize2 = Math.min(f2.width / 7, f2.height / 7);
-
-            if (aproxEquals(moduleSize, moduleSize2, f1.xUpperLeft, f1.yUpperLeft, f2.xUpperLeft, f2.yUpperLeft)) {
-                similar = true;
-                break;
+    for (let f1 of positions) {
+        const scan = [0];
+        
+        let mode = imageUtils.getLuminance(image, f1.xUpperLeft, f1.yUpperLeft);    // 0 - black pixels, 255 - white pixels
+        for (let x = f1.xUpperLeft, y = f1.yUpperLeft; x < f1.xUpperLeft + f1.width && y < f1.yUpperLeft + f1.height; x++, y++) {
+            let pixelY = imageUtils.getLuminance(image, x, y);
+            if (mode != pixelY) {
+                mode = pixelY;
+                scan.push(1);
+            } else {
+                scan[scan.length - 1]++;
             }
         }
 
-        if (similar)
-            continue;
-        
-        filtered2.push(f1);
+        for (let scanPos of possibleQrFinderPattern(scan)) {
+            let moduleSize = 0;
+
+            for (let i = 0; i < 5; i++)
+                moduleSize += scan[scanPos + i];
+            moduleSize /= 7;
+
+            if (aproxEquals(moduleSize, Math.min(f1.height / 7, f1.width / 7), 0, 0, 0, 0)) {
+                filtered2.push(f1);
+                break;
+            }
+        }
     }
 
-    return filtered2;
+    // Filtering aprox. equal
+    const filtered3 = [];
+    for (let f2 of filtered2) {
+        const moduleSize2 = Math.min(f2.width / 7, f2.height / 7);
+
+        let similar = false;
+        let index = 0;
+        for (let f3 of filtered3) {
+            const moduleSize3 = Math.min(f3.width / 7, f3.height / 7);
+
+            if (aproxEquals(moduleSize2, moduleSize3, f2.xUpperLeft, f2.yUpperLeft, f3.xUpperLeft, f3.yUpperLeft)) {
+                similar = true;
+                break;
+            }
+
+            index++;
+        }
+
+        if (similar) {
+            filtered3[index].xUpperLeft += f2.xUpperLeft;
+            filtered3[index].yUpperLeft += f2.yUpperLeft;
+            filtered3[index].width += f2.width;
+            filtered3[index].height += f2.height;
+            filtered3[index].similarCount++;
+        } else {
+            filtered3.push({ ...f2, similarCount: 1});
+        }
+    }
+
+    filtered3.forEach((value) => {        
+        value.xUpperLeft = Math.round(value.xUpperLeft / value.similarCount);
+        value.yUpperLeft = Math.round(value.yUpperLeft / value.similarCount);
+        value.width = Math.round(value.width / value.similarCount);
+        value.height = Math.round(value.height / value.similarCount);
+        delete value.similarCount;
+    })
+
+    return filtered3;
 };
 
 // Returns 3 best locations, i.e. those that have similar module size and form a shape closer to an isosceles right-angled triangle
@@ -103,6 +139,7 @@ const findBestQrFinderPatternLocations = (possibleLocations) => {
             for (let k = j + 1; k < possibleLocations.length; k++) {
                 const fp3 = possibleLocations[k];
                 const moduleSize3 = Math.min(fp3.width / 7, fp3.height / 7);
+                
                 const minModuleSize = Math.min(Math.min(moduleSize1, moduleSize2), moduleSize3);
                 const maxModuleSize = Math.max(Math.max(moduleSize1, moduleSize2), moduleSize3);
                 if (maxModuleSize > minModuleSize * 1.4)
@@ -157,7 +194,6 @@ const findBestQrFinderPatternLocations = (possibleLocations) => {
     }
 
     return { qr1, qr2, qr3 };
-
 };
 
 module.exports.findQr = (image) => {
@@ -222,9 +258,8 @@ module.exports.findQr = (image) => {
         });
     }
 
-    const possibleQrFinderPatternLocations = filterPossibleQrCodeScans(possibleHorizontal, possibleVertical);
-    console.log(possibleQrFinderPatternLocations);
-    const bestLocations = findBestQrFinderPatternLocations(possibleQrFinderPatternLocations);
+    const possibleQrFinderPatternPositions = filterPossibleQrCodeScans(image, possibleHorizontal, possibleVertical);
+    const bestLocations = findBestQrFinderPatternLocations(possibleQrFinderPatternPositions);
 
     return bestLocations;
 };
