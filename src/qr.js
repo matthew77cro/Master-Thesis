@@ -8,8 +8,8 @@ const aproxEquals = (moduleSize1, moduleSize2, x1, y1,x2, y2) =>
     Math.abs(moduleSize1 * 7 - moduleSize2 * 7) < Math.min(moduleSize1, moduleSize2);
 const distance = (x1, y1, x2, y2) => Math.sqrt((x2 - x1) ** 2 + (y2 - y1) ** 2);
 
-// Looking for 1:1:3:1:1 with allowed deviation of max 50% per module
-const possibleQrFinderPattern = (scan) => {
+// Looking for 1:1:3:1:1 with allowed deviation of max 75% per module
+const possibleQrFinderPattern = (scan, maxVariance) => {
     if (scan.length < 5)
         return [];
     
@@ -17,7 +17,10 @@ const possibleQrFinderPattern = (scan) => {
     
     for (let i = 0; i + 5 <= scan.length; i++) {
         const moduleSize = (scan[i] + scan[i + 1] + scan[i + 2] + scan[i + 3] + scan[i + 4]) / 7;
-        const allowedDeviation = moduleSize / 2;
+        if (moduleSize < 1)
+            continue;
+
+        const allowedDeviation = maxVariance * moduleSize;
         
         if (Math.abs(moduleSize - scan[i]) <= allowedDeviation &&
             Math.abs(moduleSize - scan[i + 1]) <= allowedDeviation &&
@@ -65,7 +68,7 @@ const filterPossibleQrCodeScans = (image, possibleHorizontal, possibleVertical) 
             }
         }
 
-        for (let scanPos of possibleQrFinderPattern(scan)) {
+        for (let scanPos of possibleQrFinderPattern(scan, 0.75)) {
             let moduleSize = 0;
 
             for (let i = 0; i < 5; i++)
@@ -114,7 +117,9 @@ const filterPossibleQrCodeScans = (image, possibleHorizontal, possibleVertical) 
         value.width = Math.round(value.width / value.similarCount);
         value.height = Math.round(value.height / value.similarCount);
         delete value.similarCount;
-    })
+    });
+
+    console.log(filtered3);
 
     return filtered3;
 };
@@ -204,7 +209,6 @@ module.exports.findQr = (image) => {
     const height = image.metadata.height;
 
     const possibleHorizontal = [];
-    const possibleVertical = [];
 
     // Finding with horizontal scan lines
     for (let y = 0; y < height; y++) {
@@ -223,7 +227,7 @@ module.exports.findQr = (image) => {
             }
         }
 
-        possibleQrFinderPattern(scan).forEach((index) => {
+        possibleQrFinderPattern(scan, 0.5).forEach((index) => {
             possibleHorizontal.push({
                 xStart: scanXCoordinates[index],
                 xEnd: scanXCoordinates[index] + scan[index] + scan[index + 1] + scan[index + 2] + scan[index + 3] + scan[index + 4],
@@ -249,7 +253,7 @@ module.exports.findQr = (image) => {
             }
         }
 
-        possibleQrFinderPattern(scan).forEach((index) => {
+        possibleQrFinderPattern(scan, 0.5).forEach((index) => {
             possibleVertical.push({
                 x,
                 yStart: scanYCoordinates[index],
